@@ -5,7 +5,7 @@ description = "Summarize a YouTube video into Traditional Chinese (zh-TW) from i
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "yt-dlp>=2024.1.0",
+    "yt-dlp[default]>=2024.1.0",
     "faster-whisper>=1.0.0",
     "python-dotenv>=1.0.0",
 ]
