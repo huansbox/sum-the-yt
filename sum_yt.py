@@ -210,14 +210,64 @@ def _choose_auto_lang(auto: dict, info: dict) -> str | None:
     return _choose_lang(auto)
 
 
-def probe(url: str, cookies_from_browser: str | None) -> dict:
+def probe(
+    url: str,
+    cookies_from_browser: str | None,
+    *,
+    allow_no_formats: bool = False,
+) -> dict:
     """Extract video metadata without downloading anything."""
     import yt_dlp
 
     opts = {"skip_download": True, "quiet": True, "no_warnings": True}
+    if allow_no_formats:
+        opts["ignore_no_formats_error"] = True
     opts.update(_cookie_opts(cookies_from_browser))
     with yt_dlp.YoutubeDL(opts) as ydl:
         return ydl.extract_info(url, download=False)
+
+
+def _has_media_formats(info: dict) -> bool:
+    """Return whether yt-dlp advertised at least one playable media format."""
+    return any(
+        fmt.get("vcodec") not in {None, "none"}
+        or fmt.get("acodec") not in {None, "none"}
+        for fmt in (info.get("formats") or [])
+    )
+
+
+def probe_access(url: str, cookies_from_browser: str | None) -> tuple[dict, str | None]:
+    """Probe anonymously, using configured cookies only for members-only videos."""
+    info = probe(url, None, allow_no_formats=True)
+    availability = info.get("availability")
+
+    if availability in {"public", "unlisted"}:
+        if not _has_media_formats(info):
+            raise RuntimeError(
+                f"{availability} video advertised no playable media formats"
+            )
+        log(f"access: {availability} (no cookies)")
+        return info, None
+
+    if availability == "subscriber_only":
+        if not cookies_from_browser:
+            raise RuntimeError(
+                "members-only video requires SUMYT_COOKIES_FROM_BROWSER "
+                "or --cookies-from-browser"
+            )
+        info = probe(url, cookies_from_browser)
+        if not _has_media_formats(info):
+            raise RuntimeError(
+                "members-only access succeeded but advertised no playable media formats"
+            )
+        log(f"access: subscriber_only ({cookies_from_browser})")
+        return info, cookies_from_browser
+
+    label = availability or "unknown"
+    raise RuntimeError(
+        f"video is not publicly accessible (availability={label}); "
+        "browser cookies are only used for members-only videos"
+    )
 
 
 def fetch_subtitles(
@@ -448,7 +498,7 @@ def _metadata_header(info: dict, url: str) -> str:
 def process_video(url: str, cfg: argparse.Namespace) -> dict:
     """Process a single video. Returns a result dict."""
     log(f"=== {url} ===")
-    info = probe(url, cfg.cookies_from_browser)
+    info, effective_cookies = probe_access(url, cfg.cookies_from_browser)
     title = info.get("title", "(unknown)")
     slug = slugify(title, fallback=info.get("id", "video"))
     date_dir = _fmt_date(info.get("upload_date"))
@@ -462,7 +512,7 @@ def process_video(url: str, cfg: argparse.Namespace) -> dict:
 
     with tempfile.TemporaryDirectory(prefix="sum-yt-") as tmp:
         workdir = Path(tmp)
-        srt = fetch_subtitles(url, workdir, info, cfg.cookies_from_browser)
+        srt = fetch_subtitles(url, workdir, info, effective_cookies)
         if not srt:
             if cfg.no_whisper:
                 return {
@@ -472,7 +522,7 @@ def process_video(url: str, cfg: argparse.Namespace) -> dict:
                     "error": "no subtitles and --no-whisper set",
                 }
             srt = transcribe_with_whisper(
-                url, workdir, cfg.whisper_model, cfg.cookies_from_browser
+                url, workdir, cfg.whisper_model, effective_cookies
             )
 
     transcript = srt_to_text(srt)
@@ -519,7 +569,7 @@ def main() -> int:
         "--cookies-from-browser",
         default=os.environ.get("SUMYT_COOKIES_FROM_BROWSER") or None,
         metavar="BROWSER[:PROFILE]",
-        help="Load cookies from a browser (chrome/safari/firefox/brave) to avoid 429.",
+        help="Load browser cookies only when a video is members-only.",
     )
     parser.add_argument(
         "--claude-model",

@@ -32,7 +32,7 @@ videos/<yyyy-mm-dd>/<slug-of-title>/
 
 ```bash
 uv sync                       # 建環境
-cp .env.example .env          # 設定（建議填 SUMYT_COOKIES_FROM_BROWSER=chrome）
+cp .env.example .env          # 設定（會員影片建議填 SUMYT_COOKIES_FROM_BROWSER=firefox）
 
 # 單部
 uv run sum-yt "https://www.youtube.com/watch?v=VIDEO_ID"
@@ -51,7 +51,7 @@ uv run sum-yt URL --force
 
 | 變數 | CLI 旗標 | 說明 | 預設 |
 | --- | --- | --- | --- |
-| `SUMYT_COOKIES_FROM_BROWSER` | `--cookies-from-browser` | 從瀏覽器讀 cookies 以避開 429（`chrome`/`safari`/`firefox`/`brave`，支援 `chrome:Profile`） | 無 |
+| `SUMYT_COOKIES_FROM_BROWSER` | `--cookies-from-browser` | 只有偵測到會員影片時才讀瀏覽器 cookies（`chrome`/`safari`/`firefox`/`brave`，支援 `chrome:Profile`） | 無 |
 | `SUMYT_CLAUDE_MODEL` | `--claude-model` | 覆寫 claude CLI 模型 | CLI 預設 |
 | `SUMYT_WHISPER_MODEL` | `--whisper-model` | 備援轉錄模型大小 | `small` |
 | `SUMYT_VIDEOS_DIR` | `--videos-dir` | 產物根目錄 | `videos` |
@@ -63,7 +63,7 @@ uv run sum-yt URL --force
 ## 已知行為
 
 - YouTube 對**翻譯字幕軌**限流很兇（常 429）；本工具改抓**原始語言軌**並讓 `claude` 翻成繁中，既穩定又更準確。
-- 帶 `--cookies-from-browser` 通常能避開大多數限流。
+- 一般與不公開影片會匿名處理；只有 YouTube 標示為會員限定時，才會讀取 `--cookies-from-browser` 指定的瀏覽器 cookies。這個設定不會作為 HTTP 429、PO Token 或其他錯誤的通用重試手段。
 - 完全無字幕的影片才會走 Whisper（較慢、首次需下載模型）；用 `--no-whisper` 可讓這類影片直接失敗。
 
 ## License
