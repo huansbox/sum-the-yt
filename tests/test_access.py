@@ -94,6 +94,7 @@ class EffectiveCookieTests(unittest.TestCase):
             whisper_model="small",
             claude_model=None,
             max_chars=120_000,
+            transcript_only=False,
         )
 
     @patch("sum_yt.summarize_with_claude", return_value="## 一句話總結\n完成")

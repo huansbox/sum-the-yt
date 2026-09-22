@@ -17,6 +17,7 @@
 videos/<yyyy-mm-dd>/<slug-of-title>/
 ├── subtitle.srt     # 帶時間軸的字幕（原始語言；Whisper 路徑則為轉錄結果）
 ├── transcript.txt   # 純逐字稿
+├── metadata.json    # 供程式讀取的影片 metadata
 └── summary.md       # 繁體中文摘要 + metadata（頻道/時長/上傳日期/ID）
 ```
 
@@ -45,6 +46,9 @@ uv run sum-yt -f urls.txt
 
 # 強制重跑（預設會跳過已存在的 summary.md）
 uv run sum-yt URL --force
+
+# 只下載逐字稿與 metadata，不呼叫 claude、不產生 summary.md
+uv run sum-yt URL --transcript-only
 ```
 
 ## 設定（`.env` 或環境變數，CLI 旗標優先）
@@ -58,6 +62,7 @@ uv run sum-yt URL --force
 | `SUMYT_MAX_CHARS` | `--max-chars` | 逐字稿超過此字數啟用 map-reduce | `120000` |
 | `SUMYT_NO_WHISPER` | `--no-whisper` | 停用 Whisper 備援 | 關 |
 | — | `-f, --urls-file` | 批次 URL 清單檔 | — |
+| — | `--transcript-only` | 只寫字幕、逐字稿與 metadata，不執行摘要 | 關 |
 | — | `--force` | 覆寫已存在產物 | 關 |
 
 ## 已知行為
