@@ -12,6 +12,7 @@ Artifacts per video:
     <videos-dir>/<slug-of-title>/
         subtitle.srt    timestamped subtitles (original language)
         transcript.txt  plain transcript
+        metadata.json   machine-readable video metadata
         summary.md      Traditional Chinese summary + metadata header
 
 Configuration is read from .env / environment (CLI flags take precedence):
@@ -28,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import os
 import re
 import subprocess
@@ -495,6 +497,57 @@ def _metadata_header(info: dict, url: str) -> str:
     )
 
 
+def _metadata(info: dict, url: str) -> dict[str, str]:
+    """Return the stable machine-readable metadata contract."""
+    uploaded = _fmt_date(info.get("upload_date"))
+    return {
+        "id": str(info.get("id") or ""),
+        "url": str(info.get("webpage_url") or info.get("original_url") or url),
+        "title": str(info.get("title") or ""),
+        "channel": str(info.get("uploader") or info.get("channel") or ""),
+        "duration": _fmt_duration(info.get("duration")),
+        "uploaded": "" if uploaded == "未知" else uploaded,
+    }
+
+
+def _write_metadata(out_dir: Path, info: dict, url: str) -> dict[str, str]:
+    metadata = _metadata(info, url)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    target = out_dir / "metadata.json"
+    temporary = target.with_suffix(".json.tmp")
+    temporary.write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    temporary.replace(target)
+    return metadata
+
+
+def _video_id_from_summary(path: Path) -> str | None:
+    try:
+        header = path.read_text(encoding="utf-8", errors="ignore")[:4000]
+    except OSError:
+        return None
+    match = re.search(r"(?:影片 ID|Video ID)[：:]\s*([\w-]{11})", header)
+    return match.group(1) if match else None
+
+
+def _find_cached_video(videos_dir: Path, video_id: str) -> Path | None:
+    """Find an existing cache by video ID, independent of title/date changes."""
+    if not videos_dir.exists():
+        return None
+    for metadata_path in videos_dir.glob("*/*/metadata.json"):
+        try:
+            cached = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if str(cached.get("id")) == video_id:
+                return metadata_path.parent
+        except (OSError, ValueError, TypeError):
+            continue
+    for summary_path in videos_dir.glob("*/*/summary.md"):
+        if _video_id_from_summary(summary_path) == video_id:
+            return summary_path.parent
+    return None
+
+
 def process_video(url: str, cfg: argparse.Namespace) -> dict:
     """Process a single video. Returns a result dict."""
     log(f"=== {url} ===")
@@ -503,12 +556,43 @@ def process_video(url: str, cfg: argparse.Namespace) -> dict:
     slug = slugify(title, fallback=info.get("id", "video"))
     date_dir = _fmt_date(info.get("upload_date"))
     date_dir = date_dir if date_dir != "未知" else "unknown-date"
-    out_dir = Path(cfg.videos_dir) / date_dir / slug
+    videos_dir = Path(cfg.videos_dir)
+    out_dir = _find_cached_video(videos_dir, str(info.get("id") or ""))
+    out_dir = out_dir or videos_dir / date_dir / slug
     summary_path = out_dir / "summary.md"
 
-    if summary_path.exists() and not cfg.force:
+    metadata = _write_metadata(out_dir, info, url)
+
+    if (
+        getattr(cfg, "transcript_only", False)
+        and all(
+            (out_dir / filename).exists()
+            for filename in ("subtitle.srt", "transcript.txt")
+        )
+        and not cfg.force
+    ):
+        log(f"SKIP (transcript cache complete): {out_dir}")
+        return {
+            "url": url,
+            "status": "skip",
+            "slug": out_dir.name,
+            "dir": str(out_dir),
+            "metadata": metadata,
+        }
+
+    if (
+        summary_path.exists()
+        and not cfg.force
+        and not getattr(cfg, "transcript_only", False)
+    ):
         log(f"SKIP (already done): {summary_path}  — use --force to overwrite")
-        return {"url": url, "status": "skip", "slug": slug}
+        return {
+            "url": url,
+            "status": "skip",
+            "slug": out_dir.name,
+            "dir": str(out_dir),
+            "metadata": metadata,
+        }
 
     with tempfile.TemporaryDirectory(prefix="sum-yt-") as tmp:
         workdir = Path(tmp)
@@ -534,10 +618,26 @@ def process_video(url: str, cfg: argparse.Namespace) -> dict:
     (out_dir / "transcript.txt").write_text(transcript + "\n", encoding="utf-8")
     log(f"subtitle + transcript written to {out_dir}")
 
+    if getattr(cfg, "transcript_only", False):
+        log(f"transcript-only complete: {out_dir}")
+        return {
+            "url": url,
+            "status": "ok",
+            "slug": out_dir.name,
+            "dir": str(out_dir),
+            "metadata": metadata,
+        }
+
     summary = summarize_with_claude(transcript, title, cfg.claude_model, cfg.max_chars)
     summary_path.write_text(_metadata_header(info, url) + summary + "\n", encoding="utf-8")
     log(f"summary written to {summary_path}")
-    return {"url": url, "status": "ok", "slug": slug}
+    return {
+        "url": url,
+        "status": "ok",
+        "slug": out_dir.name,
+        "dir": str(out_dir),
+        "metadata": metadata,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -597,6 +697,11 @@ def main() -> int:
         action="store_true",
         default=_env_bool("SUMYT_NO_WHISPER"),
         help="Disable the Whisper fallback. Fail if no subtitles can be fetched.",
+    )
+    parser.add_argument(
+        "--transcript-only",
+        action="store_true",
+        help="Write subtitle.srt, transcript.txt, and metadata.json without summarizing.",
     )
     parser.add_argument(
         "--force", action="store_true", help="Re-process even if summary.md already exists."
