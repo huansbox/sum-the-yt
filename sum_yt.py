@@ -522,6 +522,21 @@ def _write_metadata(out_dir: Path, info: dict, url: str) -> dict[str, str]:
     return metadata
 
 
+def _write_text_atomic(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(content, encoding="utf-8")
+    temporary.replace(path)
+
+
+def _has_complete_transcript(out_dir: Path) -> bool:
+    paths = (out_dir / "subtitle.srt", out_dir / "transcript.txt")
+    try:
+        return all(path.is_file() and path.stat().st_size > 0 for path in paths)
+    except OSError:
+        return False
+
+
 def _video_id_from_summary(path: Path) -> str | None:
     try:
         header = path.read_text(encoding="utf-8", errors="ignore")[:4000]
@@ -557,20 +572,20 @@ def process_video(url: str, cfg: argparse.Namespace) -> dict:
     date_dir = _fmt_date(info.get("upload_date"))
     date_dir = date_dir if date_dir != "未知" else "unknown-date"
     videos_dir = Path(cfg.videos_dir)
-    out_dir = _find_cached_video(videos_dir, str(info.get("id") or ""))
-    out_dir = out_dir or videos_dir / date_dir / slug
+    out_dir = None
+    if getattr(cfg, "transcript_only", False):
+        out_dir = _find_cached_video(videos_dir, str(info.get("id") or ""))
+    out_dir = out_dir or (videos_dir / date_dir / slug)
     summary_path = out_dir / "summary.md"
 
-    metadata = _write_metadata(out_dir, info, url)
+    metadata = _metadata(info, url)
 
     if (
         getattr(cfg, "transcript_only", False)
-        and all(
-            (out_dir / filename).exists()
-            for filename in ("subtitle.srt", "transcript.txt")
-        )
+        and _has_complete_transcript(out_dir)
         and not cfg.force
     ):
+        metadata = _write_metadata(out_dir, info, url)
         log(f"SKIP (transcript cache complete): {out_dir}")
         return {
             "url": url,
@@ -585,6 +600,7 @@ def process_video(url: str, cfg: argparse.Namespace) -> dict:
         and not cfg.force
         and not getattr(cfg, "transcript_only", False)
     ):
+        metadata = _write_metadata(out_dir, info, url)
         log(f"SKIP (already done): {summary_path}  — use --force to overwrite")
         return {
             "url": url,
@@ -613,12 +629,12 @@ def process_video(url: str, cfg: argparse.Namespace) -> dict:
     if not transcript.strip():
         return {"url": url, "status": "fail", "slug": slug, "error": "empty transcript"}
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "subtitle.srt").write_text(srt.rstrip() + "\n", encoding="utf-8")
-    (out_dir / "transcript.txt").write_text(transcript + "\n", encoding="utf-8")
+    _write_text_atomic(out_dir / "subtitle.srt", srt.rstrip() + "\n")
+    _write_text_atomic(out_dir / "transcript.txt", transcript + "\n")
     log(f"subtitle + transcript written to {out_dir}")
 
     if getattr(cfg, "transcript_only", False):
+        metadata = _write_metadata(out_dir, info, url)
         log(f"transcript-only complete: {out_dir}")
         return {
             "url": url,
@@ -629,7 +645,8 @@ def process_video(url: str, cfg: argparse.Namespace) -> dict:
         }
 
     summary = summarize_with_claude(transcript, title, cfg.claude_model, cfg.max_chars)
-    summary_path.write_text(_metadata_header(info, url) + summary + "\n", encoding="utf-8")
+    _write_text_atomic(summary_path, _metadata_header(info, url) + summary + "\n")
+    metadata = _write_metadata(out_dir, info, url)
     log(f"summary written to {summary_path}")
     return {
         "url": url,

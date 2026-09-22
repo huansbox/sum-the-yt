@@ -83,6 +83,25 @@ class TranscriptOnlyTests(unittest.TestCase):
         fetch.assert_not_called()
         summarize.assert_not_called()
 
+    @patch("sum_yt.summarize_with_claude")
+    @patch("sum_yt.fetch_subtitles", return_value=SRT)
+    @patch("sum_yt.probe_access", return_value=(video_info(), None))
+    def test_empty_interrupted_cache_is_repaired(self, access, fetch, summarize):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "2026-09-22" / "a-test-video"
+            out.mkdir(parents=True)
+            (out / "subtitle.srt").write_text("", encoding="utf-8")
+            (out / "transcript.txt").write_text("", encoding="utf-8")
+
+            result = sum_yt.process_video(URL, config(tmp, transcript_only=True))
+
+            self.assertEqual(result["status"], "ok")
+            self.assertGreater((out / "subtitle.srt").stat().st_size, 0)
+            self.assertGreater((out / "transcript.txt").stat().st_size, 0)
+            self.assertTrue((out / "metadata.json").exists())
+        fetch.assert_called_once()
+        summarize.assert_not_called()
+
     @patch("sum_yt.summarize_with_claude", return_value="## 一句話總結\n完成")
     @patch("sum_yt.fetch_subtitles", return_value=SRT)
     @patch("sum_yt.probe_access", return_value=(video_info(), None))
