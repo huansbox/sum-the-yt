@@ -200,14 +200,28 @@ def _choose_auto_lang(auto: dict, info: dict) -> str | None:
     if not auto:
         return None
     keys = list(auto.keys())
-    origs = [k for k in keys if k.lower().endswith("-orig")]  # genuine ASR track
-    if origs:
-        return origs[0]
     lang = (info.get("language") or "").lower()  # video's declared language
+    base = lang.split("-")[0]
+
+    def spoken(k: str) -> bool:
+        k = k.lower().removesuffix("-orig")
+        return k == lang or k.split("-")[0] == base
+
+    # Videos with dubbed audio tracks advertise one "-orig" ASR track per dub
+    # (e.g. ar-orig, en-orig, ...); the one in the declared language is the
+    # original speech, the rest transcribe the dubs.
+    origs = [k for k in keys if k.lower().endswith("-orig")]  # genuine ASR track
     if lang:
-        base = lang.split("-")[0]
+        for k in origs:
+            if spoken(k):
+                return k
+    if len(origs) == 1:
+        return origs[0]
+    if origs:
+        return _choose_lang({k: auto[k] for k in origs})
+    if lang:
         for k in keys:
-            if k.lower() == lang or k.lower().split("-")[0] == base:
+            if spoken(k):
                 return k
     return _choose_lang(auto)
 
